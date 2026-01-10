@@ -140,13 +140,31 @@ export function useArduinoWebSocket(arduinoIp: string | null) {
   }, []);
 
   const sendMessage = useCallback((type: string, payload: unknown) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    console.log(`[WS] Attempting to send message: ${type}`, payload);
+    
+    if (!wsRef.current) {
+      console.error('[WS] Cannot send - WebSocket not initialized');
+      return;
+    }
+    
+    console.log(`[WS] WebSocket readyState: ${wsRef.current.readyState} (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)`);
+    
+    if (wsRef.current.readyState === WebSocket.OPEN) {
       const message = {
         type,
         timestamp: Date.now(),
         payload,
       };
-      wsRef.current.send(JSON.stringify(message));
+      const messageStr = JSON.stringify(message);
+      console.log(`[WS] Sending:`, messageStr);
+      try {
+        wsRef.current.send(messageStr);
+        console.log(`[WS] Message sent successfully`);
+      } catch (error) {
+        console.error('[WS] Error sending message:', error);
+      }
+    } else {
+      console.error(`[WS] Cannot send - WebSocket not open (state: ${wsRef.current.readyState})`);
     }
   }, []);
 

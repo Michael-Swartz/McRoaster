@@ -1,635 +1,205 @@
 #include <Arduino.h>
-#include <SPI.h>
 #include "WiFiS3.h"
 #include "Arduino_LED_Matrix.h"
 #include <WiFiUdp.h>
 #include <ArduinoMDNS.h>
+
+#include "config.h"
+#include "hardware.h"
+#include "state.h"
+#include "pid_control.h"
+#include "safety.h"
+#include "websocket.h"
 #include "secrets.h"
 
-// mDNS hostname
-const char* mdnsHostname = "mcroaster";
+// ============== Global Objects ==============
 
-// mDNS setup
+ArduinoLEDMatrix matrix;
+WiFiServer server(WEBSOCKET_PORT);
 WiFiUDP udp;
 MDNS mdns(udp);
 
-// MAX31855 SPI pins
-const int MAX31855_CS = 10;  // Chip select pin
+int wifiStatus = WL_IDLE_STATUS;
 
-// Thermistor safety monitor pins
-const int THERMISTOR_PIN = A1;
+// ============== LED Matrix Patterns ==============
 
-// Thermistor constants
-const float VCC = 5.0;              // Supply voltage
-const float R1 = 100000.0;          // Fixed resistor (100kΩ)
-const float R0 = 100000.0;          // Thermistor resistance at 25°C
-const float T0 = 298.15;            // 25°C in Kelvin
-const float BETA = 3950.0;          // Beta coefficient
-const float TEMP_SAFETY_LIMIT = 210.0;  // °C - below thermal fuse rating
-
-ArduinoLEDMatrix matrix;
-WiFiServer server(81);  // WebSocket server on port 81
-int status = WL_IDLE_STATUS;
-
-// L298N Motor Driver Pins
-const int ENA = 9;   // PWM pin for speed control
-const int IN1 = 8;   // Motor direction pin 1
-const int IN2 = 7;   // Motor direction pin 2
-
-bool motorOn = false;
-unsigned long lastTempRead = 0;
-unsigned long lastThermistorRead = 0;
-const unsigned long tempInterval = 2000;  // Read temp every 2 seconds
-
-WiFiClient wsClient;
-bool wsConnected = false;
-
-// Forward declarations
-void sendError(const char* code, const char* message);
-void sendWebSocketFrame(String payload);
-void sendTemperature(float temp);
-void sendHeaterSafety(float temp, String status);
-void sendMotorState();
-void sendState(float temp);
-void sendConnected();
-
-// ============== SHA-1 Implementation ==============
-#define SHA1_BLOCK_SIZE 64
-#define SHA1_HASH_SIZE 20
-
-uint32_t sha1_h[5];
-uint32_t sha1_w[80];
-uint8_t sha1_buffer[SHA1_BLOCK_SIZE];
-uint32_t sha1_bufferIndex;
-uint64_t sha1_totalBits;
-
-#define SHA1_ROTL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
-
-void sha1_init() {
-  sha1_h[0] = 0x67452301;
-  sha1_h[1] = 0xEFCDAB89;
-  sha1_h[2] = 0x98BADCFE;
-  sha1_h[3] = 0x10325476;
-  sha1_h[4] = 0xC3D2E1F0;
-  sha1_bufferIndex = 0;
-  sha1_totalBits = 0;
-}
-
-void sha1_processBlock() {
-  for (int i = 0; i < 16; i++) {
-    sha1_w[i] = ((uint32_t)sha1_buffer[i * 4] << 24) |
-                ((uint32_t)sha1_buffer[i * 4 + 1] << 16) |
-                ((uint32_t)sha1_buffer[i * 4 + 2] << 8) |
-                ((uint32_t)sha1_buffer[i * 4 + 3]);
-  }
-  for (int i = 16; i < 80; i++) {
-    sha1_w[i] = SHA1_ROTL(sha1_w[i-3] ^ sha1_w[i-8] ^ sha1_w[i-14] ^ sha1_w[i-16], 1);
-  }
-
-  uint32_t a = sha1_h[0], b = sha1_h[1], c = sha1_h[2], d = sha1_h[3], e = sha1_h[4];
-
-  for (int i = 0; i < 80; i++) {
-    uint32_t f, k;
-    if (i < 20) {
-      f = (b & c) | ((~b) & d);
-      k = 0x5A827999;
-    } else if (i < 40) {
-      f = b ^ c ^ d;
-      k = 0x6ED9EBA1;
-    } else if (i < 60) {
-      f = (b & c) | (b & d) | (c & d);
-      k = 0x8F1BBCDC;
-    } else {
-      f = b ^ c ^ d;
-      k = 0xCA62C1D6;
-    }
-    uint32_t temp = SHA1_ROTL(a, 5) + f + e + k + sha1_w[i];
-    e = d;
-    d = c;
-    c = SHA1_ROTL(b, 30);
-    b = a;
-    a = temp;
-  }
-
-  sha1_h[0] += a;
-  sha1_h[1] += b;
-  sha1_h[2] += c;
-  sha1_h[3] += d;
-  sha1_h[4] += e;
-}
-
-void sha1_update(const uint8_t* data, size_t len) {
-  for (size_t i = 0; i < len; i++) {
-    sha1_buffer[sha1_bufferIndex++] = data[i];
-    sha1_totalBits += 8;
-    if (sha1_bufferIndex == SHA1_BLOCK_SIZE) {
-      sha1_processBlock();
-      sha1_bufferIndex = 0;
-    }
-  }
-}
-
-void sha1_final(uint8_t* hash) {
-  sha1_buffer[sha1_bufferIndex++] = 0x80;
-  if (sha1_bufferIndex > 56) {
-    while (sha1_bufferIndex < SHA1_BLOCK_SIZE) sha1_buffer[sha1_bufferIndex++] = 0;
-    sha1_processBlock();
-    sha1_bufferIndex = 0;
-  }
-  while (sha1_bufferIndex < 56) sha1_buffer[sha1_bufferIndex++] = 0;
-
-  for (int i = 7; i >= 0; i--) {
-    sha1_buffer[56 + (7 - i)] = (sha1_totalBits >> (i * 8)) & 0xFF;
-  }
-  sha1_processBlock();
-
-  for (int i = 0; i < 5; i++) {
-    hash[i * 4] = (sha1_h[i] >> 24) & 0xFF;
-    hash[i * 4 + 1] = (sha1_h[i] >> 16) & 0xFF;
-    hash[i * 4 + 2] = (sha1_h[i] >> 8) & 0xFF;
-    hash[i * 4 + 3] = sha1_h[i] & 0xFF;
-  }
-}
-
-// ============== Base64 Implementation ==============
-const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-String base64_encode(const uint8_t* data, size_t len) {
-  String result = "";
-  int i = 0;
-  uint8_t array3[3], array4[4];
-  int idx = 0;
-
-  while (len--) {
-    array3[idx++] = *(data++);
-    if (idx == 3) {
-      array4[0] = (array3[0] & 0xfc) >> 2;
-      array4[1] = ((array3[0] & 0x03) << 4) + ((array3[1] & 0xf0) >> 4);
-      array4[2] = ((array3[1] & 0x0f) << 2) + ((array3[2] & 0xc0) >> 6);
-      array4[3] = array3[2] & 0x3f;
-      for (i = 0; i < 4; i++) result += base64_chars[array4[i]];
-      idx = 0;
-    }
-  }
-
-  if (idx) {
-    for (int j = idx; j < 3; j++) array3[j] = 0;
-    array4[0] = (array3[0] & 0xfc) >> 2;
-    array4[1] = ((array3[0] & 0x03) << 4) + ((array3[1] & 0xf0) >> 4);
-    array4[2] = ((array3[1] & 0x0f) << 2) + ((array3[2] & 0xc0) >> 6);
-    for (int j = 0; j < idx + 1; j++) result += base64_chars[array4[j]];
-    while (idx++ < 3) result += '=';
-  }
-
-  return result;
-}
-
-// Compute WebSocket accept key
-String computeWebSocketAccept(String key) {
-  key += "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-  sha1_init();
-  sha1_update((const uint8_t*)key.c_str(), key.length());
-
-  uint8_t hash[SHA1_HASH_SIZE];
-  sha1_final(hash);
-
-  return base64_encode(hash, SHA1_HASH_SIZE);
-}
-
-// ============== MAX31855 Functions ==============
-uint32_t readMAX31855Raw() {
-  uint32_t data = 0;
-
-  digitalWrite(MAX31855_CS, LOW);
-  delayMicroseconds(1);
-
-  // Read 32 bits
-  for (int i = 31; i >= 0; i--) {
-    digitalWrite(SCK, HIGH);
-    delayMicroseconds(1);
-    if (digitalRead(MISO)) {
-      data |= ((uint32_t)1 << i);
-    }
-    digitalWrite(SCK, LOW);
-    delayMicroseconds(1);
-  }
-
-  digitalWrite(MAX31855_CS, HIGH);
-  return data;
-}
-
-float readThermocouple() {
-  uint32_t raw = readMAX31855Raw();
-
-  // Check for faults (bit 16)
-  if (raw & 0x10000) {
-    if (raw & 0x01) Serial.println("Thermocouple open circuit!");
-    if (raw & 0x02) Serial.println("Thermocouple short to GND!");
-    if (raw & 0x04) Serial.println("Thermocouple short to VCC!");
-    return -999.0;
-  }
-
-  // Extract thermocouple temperature (bits 31-18, signed 14-bit)
-  int16_t temp14 = (raw >> 18) & 0x3FFF;
-  if (temp14 & 0x2000) {  // Sign bit set
-    temp14 |= 0xC000;     // Sign extend
-  }
-
-  // Resolution is 0.25°C
-  return temp14 * 0.25;
-}
-
-float readColdJunction() {
-  uint32_t raw = readMAX31855Raw();
-
-  // Extract cold junction temp (bits 15-4, signed 12-bit)
-  int16_t temp12 = (raw >> 4) & 0x0FFF;
-  if (temp12 & 0x800) {  // Sign bit set
-    temp12 |= 0xF000;    // Sign extend
-  }
-
-  // Resolution is 0.0625°C
-  return temp12 * 0.0625;
-}
-
-// ============== Thermistor Functions ==============
-float readHeaterTemperature() {
-  // Read analog value (0-1023)
-  int adcValue = analogRead(THERMISTOR_PIN);
-  
-  // Convert to voltage
-  float voltage = (adcValue / 1023.0) * VCC;
-  
-  // Calculate thermistor resistance
-  // Vout = Vin * (RT / (R1 + RT))
-  // RT = R1 * (Vin / Vout - 1)
-  float resistance = R1 * (VCC / voltage - 1.0);
-  
-  // Calculate temperature using Beta formula
-  // 1/T = 1/T0 + (1/β) * ln(R/R0)
-  float tempK = 1.0 / (1.0/T0 + (1.0/BETA) * log(resistance/R0));
-  float tempC = tempK - 273.15;
-  
-  return tempC;
-}
-
-String getHeaterSafetyStatus(float temp) {
-  if (temp >= 210.0) {
-    return "emergency";
-  } else if (temp >= 200.0) {
-    return "critical";
-  } else if (temp >= 180.0) {
-    return "warning";
-  } else {
-    return "normal";
-  }
-}
-
-void checkHeaterSafety(float heaterTemp) {
-  if (heaterTemp >= TEMP_SAFETY_LIMIT) {
-    // EMERGENCY SHUTOFF
-    // TODO: Add heater SSR control here when implemented
-    // digitalWrite(HEATER_SSR_PIN, LOW);
+void updateMatrixForState() {
+    RoasterState state = state_get_current();
     
-    // Send error via WebSocket
-    sendError("HEATER_OVERHEAT", "Heating element exceeded safe temperature!");
-    Serial.println("!!! EMERGENCY: HEATER OVERHEAT !!!");
-  }
-}
-
-// ============== WebSocket Functions ==============
-void sendWebSocketFrame(String payload) {
-  if (!wsConnected || !wsClient.connected()) return;
-
-  int len = payload.length();
-
-  // WebSocket frame: FIN + text opcode
-  wsClient.write(0x81);
-
-  // Payload length (no mask for server->client)
-  if (len <= 125) {
-    wsClient.write((uint8_t)len);
-  } else if (len <= 65535) {
-    wsClient.write(126);
-    wsClient.write((uint8_t)(len >> 8));
-    wsClient.write((uint8_t)(len & 0xFF));
-  }
-
-  // Payload
-  wsClient.print(payload);
-}
-
-void sendTemperature(float temp) {
-  String json = "{\"type\":\"temperature\",\"timestamp\":";
-  json += String(millis());
-  json += ",\"payload\":{\"value\":";
-  json += String(temp, 2);
-  json += ",\"unit\":\"C\"}}";
-
-  sendWebSocketFrame(json);
-  Serial.println("WS TX: " + json);
-}
-
-void sendHeaterSafety(float temp, String status) {
-  String json = "{\"type\":\"heaterSafety\",\"timestamp\":";
-  json += String(millis());
-  json += ",\"payload\":{\"temperature\":";
-  json += String(temp, 2);
-  json += ",\"unit\":\"C\",\"status\":\"";
-  json += status;
-  json += "\"}}";
-
-  sendWebSocketFrame(json);
-  Serial.println("WS TX: " + json);
-}
-
-void sendMotorState() {
-  String json = "{\"type\":\"motor\",\"timestamp\":";
-  json += String(millis());
-  json += ",\"payload\":{\"on\":";
-  json += motorOn ? "true" : "false";
-  json += "}}";
-
-  sendWebSocketFrame(json);
-  Serial.println("WS TX: " + json);
-}
-
-void sendState(float temp) {
-  String json = "{\"type\":\"state\",\"timestamp\":";
-  json += String(millis());
-  json += ",\"payload\":{\"temperature\":{\"value\":";
-  json += String(temp, 2);
-  json += ",\"unit\":\"C\"},\"motor\":{\"on\":";
-  json += motorOn ? "true" : "false";
-  json += "}}}";
-
-  sendWebSocketFrame(json);
-  Serial.println("WS TX: " + json);
-}
-
-void sendConnected() {
-  IPAddress ip = WiFi.localIP();
-  String json = "{\"type\":\"connected\",\"timestamp\":";
-  json += String(millis());
-  json += ",\"payload\":{\"ip\":\"";
-  json += ip.toString();
-  json += "\",\"firmware\":\"1.0.0\"}}";
-
-  sendWebSocketFrame(json);
-  Serial.println("WS TX: " + json);
-}
-
-void sendError(const char* code, const char* message) {
-  String json = "{\"type\":\"error\",\"timestamp\":";
-  json += String(millis());
-  json += ",\"payload\":{\"code\":\"";
-  json += code;
-  json += "\",\"message\":\"";
-  json += message;
-  json += "\"}}";
-
-  sendWebSocketFrame(json);
-  Serial.println("WS TX: " + json);
-}
-
-// ============== Motor Control ==============
-void setMotor(bool on) {
-  motorOn = on;
-  if (on) {
-    digitalWrite(IN1, HIGH);
-    digitalWrite(IN2, LOW);
-    analogWrite(ENA, 255);  // Full speed
-    Serial.println("Motor ON");
-    matrix.loadFrame(LEDMATRIX_EMOJI_HAPPY);
-  } else {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, LOW);
-    analogWrite(ENA, 0);
-    Serial.println("Motor OFF");
-    matrix.loadFrame(LEDMATRIX_EMOJI_SAD);
-  }
-
-  sendMotorState();
+    switch (state) {
+        case RoasterState::OFF:
+            matrix.loadFrame(LEDMATRIX_EMOJI_SAD);
+            break;
+        case RoasterState::PREHEAT:
+            matrix.loadFrame(LEDMATRIX_BOOTLOADER_ON);
+            break;
+        case RoasterState::ROASTING:
+            matrix.loadFrame(LEDMATRIX_EMOJI_HAPPY);
+            break;
+        case RoasterState::COOLING:
+            matrix.loadFrame(LEDMATRIX_CLOUD_WIFI);
+            break;
+        case RoasterState::MANUAL:
+            matrix.loadFrame(LEDMATRIX_HEART_BIG);
+            break;
+        case RoasterState::ERROR:
+            matrix.loadFrame(LEDMATRIX_DANGER);
+            break;
+    }
 }
 
 // ============== Setup ==============
+
 void setup() {
-  Serial.begin(115200);
-  delay(1000);
-
-  Serial.println("\n\nStarting Motor Controller...");
-
-  // Initialize SPI pins for MAX31855
-  pinMode(MAX31855_CS, OUTPUT);
-  digitalWrite(MAX31855_CS, HIGH);
-  pinMode(SCK, OUTPUT);
-  pinMode(MISO, INPUT);
-
-  // Initialize LED matrix
-  matrix.begin();
-  matrix.loadFrame(LEDMATRIX_BOOTLOADER_ON);
-
-  // Read initial temperature
-  delay(100);
-  float temp = readThermocouple();
-  Serial.print("Initial temp: ");
-  Serial.print(temp);
-  Serial.println(" C");
-
-  // Initialize motor pins
-  pinMode(ENA, OUTPUT);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-
-  // Check for WiFi module
-  if (WiFi.status() == WL_NO_MODULE) {
-    Serial.println("Communication with WiFi module failed!");
-    while (true);
-  }
-
-  // Connect to WiFi
-  while (status != WL_CONNECTED) {
-    Serial.print("Connecting to: ");
-    Serial.println(ssid);
-    status = WiFi.begin(ssid, password);
-    delay(10000);
-  }
-
-  server.begin();
-
-  // Initialize mDNS responder
-  mdns.begin(WiFi.localIP(), mdnsHostname);
-  Serial.print("mDNS responder started: ");
-  Serial.print(mdnsHostname);
-  Serial.println(".local");
-
-  // Show WiFi connected
-  matrix.loadFrame(LEDMATRIX_CLOUD_WIFI);
-  delay(2000);
-
-  // Motor off by default
-  motorOn = false;
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, LOW);
-  analogWrite(ENA, 0);
-  matrix.loadFrame(LEDMATRIX_EMOJI_SAD);
-
-  // Print connection info
-  Serial.println("\n========================================");
-  Serial.println("Connected!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("mDNS Hostname: ");
-  Serial.print(mdnsHostname);
-  Serial.println(".local");
-  Serial.println("WebSocket server on port 81");
-  Serial.println("========================================");
-}
-
-// ============== Main Loop ==============
-void loop() {
-  // Run mDNS
-  mdns.run();
-
-  // Read and send thermocouple temperature periodically
-  if (millis() - lastTempRead >= tempInterval) {
-    lastTempRead = millis();
-    float temp = readThermocouple();
-    Serial.print("Thermocouple: ");
-    Serial.print(temp);
-    Serial.println(" C");
-
-    if (temp <= -999.0) {
-      uint32_t raw = readMAX31855Raw();
-      if (raw & 0x01) sendError("THERMOCOUPLE_OPEN", "Thermocouple open circuit!");
-      if (raw & 0x02) sendError("THERMOCOUPLE_SHORT_GND", "Thermocouple short to GND!");
-      if (raw & 0x04) sendError("THERMOCOUPLE_SHORT_VCC", "Thermocouple short to VCC!");
-    } else {
-      sendTemperature(temp);
-    }
-  }
-
-  // Read and send thermistor temperature periodically
-  if (millis() - lastThermistorRead >= tempInterval) {
-    lastThermistorRead = millis();
-    float heaterTemp = readHeaterTemperature();
+    Serial.begin(115200);
+    delay(1000);
     
-    Serial.print("Thermistor: ");
+    Serial.println("\n");
+    Serial.println("========================================");
+    Serial.println("  MCRoaster Coffee Roaster Controller");
+    Serial.println("  Firmware: " FIRMWARE_VERSION);
+    Serial.println("========================================");
+    Serial.println();
+    
+    // Initialize LED matrix
+    matrix.begin();
+    matrix.loadFrame(LEDMATRIX_BOOTLOADER_ON);
+    
+    // Initialize hardware
+    Serial.println("[INIT] Initializing hardware...");
+    hardware_init();
+    
+    // Initialize PID controller
+    Serial.println("[INIT] Initializing PID controller...");
+    pid_init();
+    
+    // Initialize safety system
+    Serial.println("[INIT] Initializing safety system...");
+    safety_init();
+    
+    // Initialize state machine
+    Serial.println("[INIT] Initializing state machine...");
+    state_init();
+    
+    // Test temperature sensors
+    Serial.println("[INIT] Testing sensors...");
+    delay(100);
+    
+    float chamberTemp = thermocouple_read();
+    Serial.print("  Chamber temp: ");
+    if (isnan(chamberTemp)) {
+        Serial.println("FAULT - check thermocouple");
+    } else {
+        Serial.print(chamberTemp);
+        Serial.println(" C");
+    }
+    
+    float heaterTemp = thermistor_read();
+    Serial.print("  Heater temp: ");
     Serial.print(heaterTemp);
     Serial.println(" C");
     
-    String status = getHeaterSafetyStatus(heaterTemp);
-    sendHeaterSafety(heaterTemp, status);
-    
-    // Check for emergency shutoff
-    checkHeaterSafety(heaterTemp);
-  }
-
-  // Check for new WebSocket client
-  WiFiClient newClient = server.available();
-
-  if (newClient) {
-    Serial.println("New client connecting...");
-    String request = "";
-    unsigned long timeout = millis() + 5000;
-
-    while (newClient.connected() && millis() < timeout) {
-      if (newClient.available()) {
-        char c = newClient.read();
-        request += c;
-
-        if (request.endsWith("\r\n\r\n")) {
-          break;
+    // Check for WiFi module
+    if (WiFi.status() == WL_NO_MODULE) {
+        Serial.println("[ERROR] WiFi module not found!");
+        matrix.loadFrame(LEDMATRIX_DANGER);
+        while (true) {
+            delay(1000);
         }
-      }
     }
-
-    // Check if this is a WebSocket upgrade request
-    if (request.indexOf("Upgrade: websocket") > 0) {
-      Serial.println("WebSocket handshake request received");
-
-      // Extract key
-      int keyStart = request.indexOf("Sec-WebSocket-Key: ") + 19;
-      int keyEnd = request.indexOf("\r\n", keyStart);
-      String key = request.substring(keyStart, keyEnd);
-
-      Serial.print("Key: ");
-      Serial.println(key);
-
-      // Compute proper accept key
-      String acceptKey = computeWebSocketAccept(key);
-      Serial.print("Accept: ");
-      Serial.println(acceptKey);
-
-      // Send WebSocket handshake response
-      newClient.println("HTTP/1.1 101 Switching Protocols");
-      newClient.println("Upgrade: websocket");
-      newClient.println("Connection: Upgrade");
-      newClient.print("Sec-WebSocket-Accept: ");
-      newClient.println(acceptKey);
-      newClient.println();
-
-      wsClient = newClient;
-      wsConnected = true;
-
-      Serial.println("WebSocket connected!");
-
-      // Send connected message and initial state
-      delay(100);
-      sendConnected();
-      float temp = readThermocouple();
-      sendState(temp);
-    } else {
-      // Regular HTTP request
-      newClient.println("HTTP/1.1 200 OK");
-      newClient.println("Content-type:text/plain");
-      newClient.println();
-      newClient.println("WebSocket server running on port 81");
-      newClient.stop();
+    
+    // Connect to WiFi
+    Serial.println("[INIT] Connecting to WiFi...");
+    Serial.print("  SSID: ");
+    Serial.println(ssid);
+    
+    while (wifiStatus != WL_CONNECTED) {
+        wifiStatus = WiFi.begin(ssid, password);
+        if (wifiStatus != WL_CONNECTED) {
+            Serial.println("  Retrying...");
+            delay(5000);
+        }
     }
-  }
+    
+    Serial.println("  Connected!");
+    Serial.print("  IP: ");
+    Serial.println(WiFi.localIP());
+    
+    // Start WebSocket server
+    server.begin();
+    websocket_init(&server);
+    
+    // Start mDNS
+    mdns.begin(WiFi.localIP(), MDNS_HOSTNAME);
+    Serial.print("[INIT] mDNS: ");
+    Serial.print(MDNS_HOSTNAME);
+    Serial.println(".local");
+    
+    // Show ready state
+    matrix.loadFrame(LEDMATRIX_EMOJI_SAD);  // OFF state
+    
+    Serial.println();
+    Serial.println("========================================");
+    Serial.println("  System Ready!");
+    Serial.print("  WebSocket: ws://");
+    Serial.print(WiFi.localIP());
+    Serial.print(":");
+    Serial.println(WEBSOCKET_PORT);
+    Serial.print("  mDNS: ");
+    Serial.print(MDNS_HOSTNAME);
+    Serial.println(".local");
+    Serial.println("========================================");
+    Serial.println();
+}
 
-  // Check if WebSocket client disconnected
-  if (wsConnected && !wsClient.connected()) {
-    Serial.println("WebSocket client disconnected");
-    wsConnected = false;
-  }
+// ============== Main Loop ==============
 
-  // Handle incoming WebSocket messages
-  if (wsConnected && wsClient.available()) {
-    uint8_t opcode = wsClient.read();
-    uint8_t len = wsClient.read();
+static RoasterState lastState = RoasterState::OFF;
+static unsigned long lastDebugPrint = 0;
+const unsigned long DEBUG_PRINT_INTERVAL = 5000;
 
-    bool masked = len & 0x80;
-    len &= 0x7F;
-
-    uint8_t mask[4];
-    if (masked) {
-      for (int i = 0; i < 4; i++) {
-        mask[i] = wsClient.read();
-      }
+void loop() {
+    // Run mDNS responder
+    mdns.run();
+    
+    // Update WebSocket (handles connections, messages)
+    websocket_update();
+    
+    // Update safety system
+    safety_update();
+    
+    // Update state machine
+    state_update();
+    
+    // Update LED matrix if state changed
+    RoasterState currentState = state_get_current();
+    if (currentState != lastState) {
+        updateMatrixForState();
+        lastState = currentState;
     }
-
-    String message = "";
-    for (int i = 0; i < len; i++) {
-      uint8_t c = wsClient.read();
-      if (masked) {
-        c ^= mask[i % 4];
-      }
-      message += (char)c;
+    
+    // Periodic debug output
+    if (millis() - lastDebugPrint >= DEBUG_PRINT_INTERVAL) {
+        lastDebugPrint = millis();
+        
+        Serial.println("--- Status ---");
+        Serial.print("State: ");
+        Serial.println(state_get_name(currentState));
+        Serial.print("Chamber: ");
+        float chamberTemp = thermocouple_read_filtered();
+        Serial.print(isnan(chamberTemp) ? -999 : chamberTemp);
+        Serial.print(" C, Heater: ");
+        Serial.print(thermistor_read());
+        Serial.println(" C");
+        Serial.print("Setpoint: ");
+        Serial.print(state_get_setpoint());
+        Serial.print(" C, Fan: ");
+        Serial.print(state_get_fan_speed());
+        Serial.print("%, Heater: ");
+        Serial.print(state_get_heater_power());
+        Serial.println("%");
+        Serial.print("WebSocket: ");
+        Serial.println(websocket_is_connected() ? "Connected" : "Disconnected");
+        Serial.println("--------------");
     }
-
-    Serial.print("WS RX: ");
-    Serial.println(message);
-
-    // Handle commands
-    if (message.indexOf("\"type\":\"setMotor\"") > 0) {
-      bool newState = message.indexOf("\"on\":true") > 0;
-      setMotor(newState);
-    } else if (message.indexOf("\"type\":\"getState\"") > 0) {
-      float temp = readThermocouple();
-      sendState(temp);
-    }
-  }
 }
