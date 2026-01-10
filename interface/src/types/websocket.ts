@@ -11,6 +11,12 @@ export interface TemperaturePayload {
   unit: 'C';
 }
 
+export interface HeaterSafetyPayload {
+  temperature: number;
+  unit: 'C';
+  status: 'normal' | 'warning' | 'critical' | 'emergency';
+}
+
 export interface MotorPayload {
   on: boolean;
 }
@@ -32,6 +38,7 @@ export interface ConnectedPayload {
 
 // Outbound message types (Arduino -> Frontend)
 export type TemperatureMessage = WebSocketMessage<TemperaturePayload> & { type: 'temperature' };
+export type HeaterSafetyMessage = WebSocketMessage<HeaterSafetyPayload> & { type: 'heaterSafety' };
 export type MotorMessage = WebSocketMessage<MotorPayload> & { type: 'motor' };
 export type StateMessage = WebSocketMessage<StatePayload> & { type: 'state' };
 export type ErrorMessage = WebSocketMessage<ErrorPayload> & { type: 'error' };
@@ -39,6 +46,7 @@ export type ConnectedMessage = WebSocketMessage<ConnectedPayload> & { type: 'con
 
 export type OutboundMessage =
   | TemperatureMessage
+  | HeaterSafetyMessage
   | MotorMessage
   | StateMessage
   | ErrorMessage

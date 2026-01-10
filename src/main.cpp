@@ -2,10 +2,30 @@
 #include <SPI.h>
 #include "WiFiS3.h"
 #include "Arduino_LED_Matrix.h"
+#include <WiFiUdp.h>
+#include <ArduinoMDNS.h>
 #include "secrets.h"
+
+// mDNS hostname
+const char* mdnsHostname = "mcroaster";
+
+// mDNS setup
+WiFiUDP udp;
+MDNS mdns(udp);
 
 // MAX31855 SPI pins
 const int MAX31855_CS = 10;  // Chip select pin
+
+// Thermistor safety monitor pins
+const int THERMISTOR_PIN = A1;
+
+// Thermistor constants
+const float VCC = 5.0;              // Supply voltage
+const float R1 = 100000.0;          // Fixed resistor (100kΩ)
+const float R0 = 100000.0;          // Thermistor resistance at 25°C
+const float T0 = 298.15;            // 25°C in Kelvin
+const float BETA = 3950.0;          // Beta coefficient
+const float TEMP_SAFETY_LIMIT = 210.0;  // °C - below thermal fuse rating
 
 ArduinoLEDMatrix matrix;
 WiFiServer server(81);  // WebSocket server on port 81
@@ -18,10 +38,20 @@ const int IN2 = 7;   // Motor direction pin 2
 
 bool motorOn = false;
 unsigned long lastTempRead = 0;
+unsigned long lastThermistorRead = 0;
 const unsigned long tempInterval = 2000;  // Read temp every 2 seconds
 
 WiFiClient wsClient;
 bool wsConnected = false;
+
+// Forward declarations
+void sendError(const char* code, const char* message);
+void sendWebSocketFrame(String payload);
+void sendTemperature(float temp);
+void sendHeaterSafety(float temp, String status);
+void sendMotorState();
+void sendState(float temp);
+void sendConnected();
 
 // ============== SHA-1 Implementation ==============
 #define SHA1_BLOCK_SIZE 64
@@ -223,6 +253,51 @@ float readColdJunction() {
   return temp12 * 0.0625;
 }
 
+// ============== Thermistor Functions ==============
+float readHeaterTemperature() {
+  // Read analog value (0-1023)
+  int adcValue = analogRead(THERMISTOR_PIN);
+  
+  // Convert to voltage
+  float voltage = (adcValue / 1023.0) * VCC;
+  
+  // Calculate thermistor resistance
+  // Vout = Vin * (RT / (R1 + RT))
+  // RT = R1 * (Vin / Vout - 1)
+  float resistance = R1 * (VCC / voltage - 1.0);
+  
+  // Calculate temperature using Beta formula
+  // 1/T = 1/T0 + (1/β) * ln(R/R0)
+  float tempK = 1.0 / (1.0/T0 + (1.0/BETA) * log(resistance/R0));
+  float tempC = tempK - 273.15;
+  
+  return tempC;
+}
+
+String getHeaterSafetyStatus(float temp) {
+  if (temp >= 210.0) {
+    return "emergency";
+  } else if (temp >= 200.0) {
+    return "critical";
+  } else if (temp >= 180.0) {
+    return "warning";
+  } else {
+    return "normal";
+  }
+}
+
+void checkHeaterSafety(float heaterTemp) {
+  if (heaterTemp >= TEMP_SAFETY_LIMIT) {
+    // EMERGENCY SHUTOFF
+    // TODO: Add heater SSR control here when implemented
+    // digitalWrite(HEATER_SSR_PIN, LOW);
+    
+    // Send error via WebSocket
+    sendError("HEATER_OVERHEAT", "Heating element exceeded safe temperature!");
+    Serial.println("!!! EMERGENCY: HEATER OVERHEAT !!!");
+  }
+}
+
 // ============== WebSocket Functions ==============
 void sendWebSocketFrame(String payload) {
   if (!wsConnected || !wsClient.connected()) return;
@@ -251,6 +326,19 @@ void sendTemperature(float temp) {
   json += ",\"payload\":{\"value\":";
   json += String(temp, 2);
   json += ",\"unit\":\"C\"}}";
+
+  sendWebSocketFrame(json);
+  Serial.println("WS TX: " + json);
+}
+
+void sendHeaterSafety(float temp, String status) {
+  String json = "{\"type\":\"heaterSafety\",\"timestamp\":";
+  json += String(millis());
+  json += ",\"payload\":{\"temperature\":";
+  json += String(temp, 2);
+  json += ",\"unit\":\"C\",\"status\":\"";
+  json += status;
+  json += "\"}}";
 
   sendWebSocketFrame(json);
   Serial.println("WS TX: " + json);
@@ -370,6 +458,12 @@ void setup() {
 
   server.begin();
 
+  // Initialize mDNS responder
+  mdns.begin(WiFi.localIP(), mdnsHostname);
+  Serial.print("mDNS responder started: ");
+  Serial.print(mdnsHostname);
+  Serial.println(".local");
+
   // Show WiFi connected
   matrix.loadFrame(LEDMATRIX_CLOUD_WIFI);
   delay(2000);
@@ -386,17 +480,23 @@ void setup() {
   Serial.println("Connected!");
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
+  Serial.print("mDNS Hostname: ");
+  Serial.print(mdnsHostname);
+  Serial.println(".local");
   Serial.println("WebSocket server on port 81");
   Serial.println("========================================");
 }
 
 // ============== Main Loop ==============
 void loop() {
-  // Read and send temperature periodically
+  // Run mDNS
+  mdns.run();
+
+  // Read and send thermocouple temperature periodically
   if (millis() - lastTempRead >= tempInterval) {
     lastTempRead = millis();
     float temp = readThermocouple();
-    Serial.print("Temperature: ");
+    Serial.print("Thermocouple: ");
     Serial.print(temp);
     Serial.println(" C");
 
@@ -408,6 +508,22 @@ void loop() {
     } else {
       sendTemperature(temp);
     }
+  }
+
+  // Read and send thermistor temperature periodically
+  if (millis() - lastThermistorRead >= tempInterval) {
+    lastThermistorRead = millis();
+    float heaterTemp = readHeaterTemperature();
+    
+    Serial.print("Thermistor: ");
+    Serial.print(heaterTemp);
+    Serial.println(" C");
+    
+    String status = getHeaterSafetyStatus(heaterTemp);
+    sendHeaterSafety(heaterTemp, status);
+    
+    // Check for emergency shutoff
+    checkHeaterSafety(heaterTemp);
   }
 
   // Check for new WebSocket client

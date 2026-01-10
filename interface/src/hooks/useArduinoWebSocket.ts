@@ -5,21 +5,27 @@ import type { OutboundMessage, MotorPayload } from '@/types/websocket';
 
 interface ArduinoState {
   temperature: number;
+  heaterTemperature: number;
+  heaterStatus: 'normal' | 'warning' | 'critical' | 'emergency';
   motorOn: boolean;
   connected: boolean;
   ip: string | null;
   firmware: string | null;
   error: string | null;
+  autoDiscoveryStatus: 'idle' | 'discovering' | 'success' | 'failed';
 }
 
 export function useArduinoWebSocket(arduinoIp: string | null) {
   const [state, setState] = useState<ArduinoState>({
     temperature: 0,
+    heaterTemperature: 0,
+    heaterStatus: 'normal',
     motorOn: false,
     connected: false,
     ip: null,
     firmware: null,
     error: null,
+    autoDiscoveryStatus: 'idle',
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -69,6 +75,14 @@ export function useArduinoWebSocket(arduinoIp: string | null) {
               setState(prev => ({
                 ...prev,
                 temperature: message.payload.value,
+              }));
+              break;
+
+            case 'heaterSafety':
+              setState(prev => ({
+                ...prev,
+                heaterTemperature: message.payload.temperature,
+                heaterStatus: message.payload.status,
               }));
               break;
 
@@ -145,6 +159,49 @@ export function useArduinoWebSocket(arduinoIp: string | null) {
     sendMessage('getState', {});
   }, [sendMessage]);
 
+  const tryAutoDiscover = useCallback((): Promise<string | null> => {
+    return new Promise((resolve) => {
+      setState(prev => ({ ...prev, autoDiscoveryStatus: 'discovering' }));
+      
+      const mdnsHostname = 'mcroaster.local';
+      const wsUrl = `ws://${mdnsHostname}:81`;
+      
+      console.log('Attempting auto-discovery:', wsUrl);
+      
+      try {
+        const testWs = new WebSocket(wsUrl);
+        
+        const timeout = setTimeout(() => {
+          if (testWs.readyState !== WebSocket.OPEN) {
+            testWs.close();
+            setState(prev => ({ ...prev, autoDiscoveryStatus: 'failed' }));
+            console.log('Auto-discovery timed out');
+            resolve(null);
+          }
+        }, 5000); // 5 second timeout
+        
+        testWs.onopen = () => {
+          clearTimeout(timeout);
+          testWs.close();
+          setState(prev => ({ ...prev, autoDiscoveryStatus: 'success' }));
+          console.log('Auto-discovery successful!');
+          resolve(mdnsHostname);
+        };
+        
+        testWs.onerror = () => {
+          clearTimeout(timeout);
+          setState(prev => ({ ...prev, autoDiscoveryStatus: 'failed' }));
+          console.log('Auto-discovery failed');
+          resolve(null);
+        };
+      } catch (e) {
+        setState(prev => ({ ...prev, autoDiscoveryStatus: 'failed' }));
+        console.error('Auto-discovery error:', e);
+        resolve(null);
+      }
+    });
+  }, []);
+
   useEffect(() => {
     if (arduinoIp) {
       connect();
@@ -161,5 +218,6 @@ export function useArduinoWebSocket(arduinoIp: string | null) {
     disconnect,
     setMotor,
     requestState,
+    tryAutoDiscover,
   };
 }
