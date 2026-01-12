@@ -1,6 +1,6 @@
-# MCRoaster 🔥☕
+# MCRoaster
 
-A DIY fluid bed coffee roaster controller with real-time web interface. Built with an Arduino Uno R4 WiFi and a modern React frontend, MCRoaster gives you precise control over every aspect of your [...] 
+A DIY fluid bed coffee roaster controller with a real-time web interface. Built with an Arduino Uno R4 WiFi and a modern React frontend, MCRoaster gives you precise PID-controlled temperature management, comprehensive safety monitoring, and a guided roast workflow - from preheat through cooling. Connect via USB, control everything from your browser, and save your roast profiles for later review.
 
 ![MCRoaster Interface](img/homepage.png)
 
