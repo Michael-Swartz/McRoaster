@@ -1,6 +1,6 @@
 # MCRoaster 🔥☕
 
-A DIY fluid bed coffee roaster controller with real-time web interface. Built with an Arduino Uno R4 WiFi and a modern React frontend, MCRoaster gives you precise control over every aspect of your roast.
+A DIY fluid bed coffee roaster controller with real-time web interface. Built with an Arduino Uno R4 WiFi and a modern React frontend, MCRoaster gives you precise control over every aspect of your [...] 
 
 ![MCRoaster Interface](img/homepage.png)
 
@@ -97,30 +97,30 @@ MCRoaster guides you through the entire roasting process:
 ### Firmware Upload
 
 1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/mcroaster.git
-   cd mcroaster
-   ```
+    ```bash
+    git clone https://github.com/michael-swartz/mcroaster.git
+    cd mcroaster
+    ```
 
 2. Open in VS Code with PlatformIO extension
 
 3. Build and upload to Arduino:
-   ```bash
-   pio run -t upload
-   ```
+    ```bash
+    pio run -t upload
+    ```
 
 ### Web Interface
 
 1. Install dependencies:
-   ```bash
-   cd interface
-   npm install
-   ```
+    ```bash
+    cd interface
+    npm install
+    ```
 
 2. Run development server:
-   ```bash
-   npm run dev
-   ```
+    ```bash
+    npm run dev
+    ```
 
 3. Open http://localhost:3000 in Chrome/Edge
 
