@@ -13,6 +13,10 @@ void fan_set_speed(uint8_t percent);  // 0-100
 uint8_t fan_get_speed();
 bool fan_is_enabled();
 
+// Debug functions for motor controller troubleshooting
+void fan_debug_dump();   // Dump fan state to Serial
+void fan_test_direct();  // Direct pin test (5 sec HIGH on all fan pins)
+
 // ============== Heater Control ==============
 void heater_enable();
 void heater_disable();

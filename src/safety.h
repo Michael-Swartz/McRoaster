@@ -32,10 +32,6 @@ void safety_trigger_fault(const char* code, const char* message, bool fatal = tr
 // Returns true if safe
 bool safety_check_chamber_temp(float temp);
 
-// Check if heater temperature is within limits
-// Returns true if safe
-bool safety_check_heater_temp(float temp);
-
 // Check if fan speed is adequate for heater operation
 // Returns true if safe
 bool safety_check_fan_for_heater(uint8_t fan_percent, bool heater_on);

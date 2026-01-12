@@ -8,48 +8,19 @@ const GaugeComponent = dynamic(() => import('react-gauge-component'), {
 
 interface HeaterSafetyGaugeProps {
   temperature: number;
-  status: 'normal' | 'warning' | 'critical' | 'emergency';
   connected: boolean;
 }
 
-export function HeaterSafetyGauge({ temperature, status, connected }: HeaterSafetyGaugeProps) {
-  const getStatusColor = () => {
-    switch (status) {
-      case 'emergency':
-        return 'text-red-500';
-      case 'critical':
-        return 'text-orange-500';
-      case 'warning':
-        return 'text-yellow-500';
-      default:
-        return 'text-green-500';
-    }
-  };
-
-  const getStatusText = () => {
-    switch (status) {
-      case 'emergency':
-        return '🚨 EMERGENCY';
-      case 'critical':
-        return '⚠️ CRITICAL';
-      case 'warning':
-        return '⚠️ WARNING';
-      default:
-        return '✓ NORMAL';
-    }
-  };
-
+export function HeaterSafetyGauge({ temperature, connected }: HeaterSafetyGaugeProps) {
   return (
     <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-6">
       <h2 className="text-lg font-semibold text-zinc-200 mb-2 text-center">
-        Heater Element Safety
+        Heater Element Temperature
       </h2>
       
-      {connected && (
-        <div className={`text-center font-bold mb-2 ${getStatusColor()}`}>
-          {getStatusText()}
-        </div>
-      )}
+      <p className="text-zinc-400 text-xs text-center mb-4">
+        Monitoring only - no safety limits enforced
+      </p>
 
       <div className="flex justify-center">
         <GaugeComponent
@@ -60,23 +31,28 @@ export function HeaterSafetyGauge({ temperature, status, connected }: HeaterSafe
             cornerRadius: 1,
             subArcs: [
               {
+                limit: 100,
+                color: '#3B82F6',  // Blue - cool
+                showTick: true,
+              },
+              {
+                limit: 150,
+                color: '#5BE12C',  // Green - warm
+                showTick: true,
+              },
+              {
                 limit: 180,
-                color: '#5BE12C',  // Green - normal operation
+                color: '#F5CD19',  // Yellow - hot
                 showTick: true,
               },
               {
                 limit: 200,
-                color: '#F5CD19',  // Yellow - warning zone
+                color: '#F58B19',  // Orange - very hot
                 showTick: true,
               },
               {
-                limit: 210,
-                color: '#F58B19',  // Orange - critical zone
-                showTick: true,
-              },
-              {
-                limit: 220,
-                color: '#EA4228',  // Red - emergency / thermal fuse zone
+                limit: 250,
+                color: '#EA4228',  // Red - extremely hot
                 showTick: true,
               },
             ],
@@ -90,7 +66,7 @@ export function HeaterSafetyGauge({ temperature, status, connected }: HeaterSafe
             valueLabel: {
               formatTextValue: (value) => `${value}°C`,
               style: {
-                fontSize: '35px',
+                fontSize: '30px',
                 fill: connected ? '#ffffff' : '#666666',
               },
             },
@@ -104,7 +80,7 @@ export function HeaterSafetyGauge({ temperature, status, connected }: HeaterSafe
           }}
           value={connected ? temperature : 0}
           minValue={0}
-          maxValue={220}
+          maxValue={250}
         />
       </div>
 
@@ -112,13 +88,6 @@ export function HeaterSafetyGauge({ temperature, status, connected }: HeaterSafe
         <p className="text-center text-zinc-500 text-sm mt-2">
           Connect to see heater temperature
         </p>
-      )}
-
-      {connected && temperature >= 180 && (
-        <div className="mt-4 text-sm text-center">
-          <p className="text-zinc-400">Thermal fuse rating: 215°C</p>
-          <p className="text-zinc-400">Auto-shutoff: 210°C</p>
-        </div>
       )}
     </div>
   );

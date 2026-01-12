@@ -1,5 +1,6 @@
 #include "pid_control.h"
 #include "config.h"
+#include "serial_comm.h"
 
 // ============== Internal State ==============
 
@@ -32,13 +33,14 @@ void pid_init() {
     _last_time = 0;
     _is_aggressive = false;
     
-    Serial.println("[PID] Initialized");
+    serial_send_log("info", "PID", "Initialized");
 }
 
 void pid_set_setpoint(float setpoint) {
     _setpoint = setpoint;
-    Serial.print("[PID] Setpoint: ");
-    Serial.println(setpoint);
+    char msg[48];
+    snprintf(msg, sizeof(msg), "Setpoint: %.1f", setpoint);
+    serial_send_log("debug", "PID", msg);
 }
 
 float pid_get_setpoint() {
@@ -50,12 +52,9 @@ void pid_set_tunings(float kp, float ki, float kd) {
     _ki = ki;
     _kd = kd;
     
-    Serial.print("[PID] Tunings: Kp=");
-    Serial.print(kp);
-    Serial.print(" Ki=");
-    Serial.print(ki);
-    Serial.print(" Kd=");
-    Serial.println(kd);
+    char msg[80];
+    snprintf(msg, sizeof(msg), "Tunings: Kp=%.2f Ki=%.2f Kd=%.2f", kp, ki, kd);
+    serial_send_log("debug", "PID", msg);
 }
 
 void pid_set_aggressive_tunings() {
@@ -63,7 +62,7 @@ void pid_set_aggressive_tunings() {
     _ki = PID_KI_AGGRESSIVE;
     _kd = PID_KD_AGGRESSIVE;
     _is_aggressive = true;
-    Serial.println("[PID] Using aggressive tunings");
+    serial_send_log("debug", "PID", "Using aggressive tunings");
 }
 
 void pid_set_conservative_tunings() {
@@ -71,7 +70,7 @@ void pid_set_conservative_tunings() {
     _ki = PID_KI_CONSERVATIVE;
     _kd = PID_KD_CONSERVATIVE;
     _is_aggressive = false;
-    Serial.println("[PID] Using conservative tunings");
+    serial_send_log("debug", "PID", "Using conservative tunings");
 }
 
 void pid_update(float current_temp) {
@@ -142,19 +141,19 @@ void pid_reset() {
     _last_input = 0;
     _last_time = 0;
     _output = 0;
-    Serial.println("[PID] Reset");
+    serial_send_log("debug", "PID", "Reset");
 }
 
 void pid_enable() {
     _enabled = true;
     _last_time = 0;  // Reset timing on enable
-    Serial.println("[PID] Enabled");
+    serial_send_log("info", "PID", "Enabled");
 }
 
 void pid_disable() {
     _enabled = false;
     _output = 0;
-    Serial.println("[PID] Disabled");
+    serial_send_log("info", "PID", "Disabled");
 }
 
 bool pid_is_enabled() {

@@ -2,6 +2,7 @@
 #include "config.h"
 #include "hardware.h"
 #include "state.h"
+#include "serial_comm.h"
 
 // ============== Internal State ==============
 
@@ -21,7 +22,7 @@ void safety_init() {
     _fault_message[0] = '\0';
     _fault_fatal = false;
     
-    Serial.println("[SAFETY] Safety system initialized");
+    serial_send_log("info", "SAFETY", "Safety system initialized");
 }
 
 bool safety_update() {
@@ -32,15 +33,9 @@ bool safety_update() {
     
     // Read temperatures
     float chamber_temp = thermocouple_read_filtered();
-    float heater_temp = thermistor_read();
     
     // Check chamber temperature
     if (!safety_check_chamber_temp(chamber_temp)) {
-        return false;
-    }
-    
-    // Check heater temperature
-    if (!safety_check_heater_temp(heater_temp)) {
         return false;
     }
     
@@ -78,7 +73,7 @@ void safety_clear_fault() {
     _fault_code[0] = '\0';
     _fault_message[0] = '\0';
     _fault_fatal = false;
-    Serial.println("[SAFETY] Fault cleared");
+    serial_send_log("info", "SAFETY", "Fault cleared");
 }
 
 void safety_trigger_fault(const char* code, const char* message, bool fatal) {
@@ -95,13 +90,10 @@ void safety_trigger_fault(const char* code, const char* message, bool fatal) {
     strncpy(_fault_message, message, sizeof(_fault_message) - 1);
     _fault_message[sizeof(_fault_message) - 1] = '\0';
     
-    Serial.println("\n!!! SAFETY FAULT !!!");
-    Serial.print("Code: ");
-    Serial.println(_fault_code);
-    Serial.print("Message: ");
-    Serial.println(_fault_message);
-    Serial.print("Fatal: ");
-    Serial.println(_fault_fatal ? "YES" : "NO");
+    char log_msg[256];
+    snprintf(log_msg, sizeof(log_msg), "FAULT: %s - %s (Fatal: %s)", 
+             _fault_code, _fault_message, _fault_fatal ? "YES" : "NO");
+    serial_send_log("error", "SAFETY", log_msg);
     
     // Enter error state
     state_enter_error(code, message, fatal);
@@ -123,30 +115,9 @@ bool safety_check_chamber_temp(float temp) {
     
     // Warning level (non-fatal for now, just log)
     if (temp >= WARN_CHAMBER_TEMP) {
-        Serial.print("[SAFETY] WARNING: Chamber temp high: ");
-        Serial.println(temp);
-    }
-    
-    return true;
-}
-
-bool safety_check_heater_temp(float temp) {
-    // Skip check if reading is invalid
-    if (temp > 500 || temp < -50) {
-        // Thermistor reading is likely invalid
-        return true;
-    }
-    
-    if (temp >= MAX_HEATER_TEMP) {
-        safety_trigger_fault("OVER_TEMP_HEATER",
-            "Heater temperature exceeded maximum safe limit", true);
-        return false;
-    }
-    
-    // Warning level (non-fatal for now, just log)
-    if (temp >= WARN_HEATER_TEMP) {
-        Serial.print("[SAFETY] WARNING: Heater temp high: ");
-        Serial.println(temp);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "WARNING: Chamber temp high: %.1f", temp);
+        serial_send_log("warn", "SAFETY", msg);
     }
     
     return true;
@@ -169,35 +140,80 @@ bool safety_check_fan_for_heater(uint8_t fan_percent, bool heater_on) {
 }
 
 bool safety_check_thermocouple() {
+    static uint8_t fault_count = 0;
+    static uint8_t good_count = 0;
+    static uint8_t last_fault = 0;
+    static bool warning_logged = false;
+    const uint8_t FAULT_THRESHOLD = 10;  // Require 10 consecutive faults (more tolerant)
+    const uint8_t GOOD_THRESHOLD = 3;    // Require 3 good reads to clear
+    
     uint8_t fault = thermocouple_get_fault();
     
     if (fault == 0) {
+        // Good reading
+        good_count++;
+        if (good_count >= GOOD_THRESHOLD) {
+            // Multiple good reads, clear fault counter
+            fault_count = 0;
+            last_fault = 0;
+            good_count = 0;
+            warning_logged = false;
+        }
         return true;
     }
     
-    // Determine fault type
+    // Fault detected, reset good counter
+    good_count = 0;
+    
+    // Check if same fault persists
+    if (fault == last_fault) {
+        fault_count++;
+    } else {
+        // Different fault, reset counter
+        fault_count = 1;
+        last_fault = fault;
+        warning_logged = false;
+    }
+    
+    // Only trigger if fault persists for multiple reads
+    if (fault_count < FAULT_THRESHOLD) {
+        return true;  // Transient fault, ignore
+    }
+    
+    // Persistent fault - determine type
     const char* fault_type;
+    bool is_critical = true;  // Assume critical unless proven otherwise
+    
     if (fault & 0x01) {
         fault_type = "Open circuit - thermocouple disconnected";
+        is_critical = true;  // Open circuit is always critical
     } else if (fault & 0x02) {
         fault_type = "Short to GND";
+        is_critical = false;  // Short to GND is just a warning
     } else if (fault & 0x04) {
         fault_type = "Short to VCC";
+        is_critical = true;  // Short to VCC is critical
     } else {
         fault_type = "Unknown thermocouple fault";
+        is_critical = true;  // Unknown faults are critical
     }
     
     char message[128];
     snprintf(message, sizeof(message), "Thermocouple fault: %s", fault_type);
     
-    // Only trigger fault if heater is enabled (critical situation)
-    // Otherwise just log warning
-    if (heater_is_enabled()) {
+    // Only trigger fault for critical errors when heater is enabled
+    if (is_critical && heater_is_enabled()) {
         safety_trigger_fault("THERMOCOUPLE_FAULT", message, true);
         return false;
     } else {
-        Serial.print("[SAFETY] WARNING: ");
-        Serial.println(message);
-        return true;  // Allow operation without heater
+        // Just log once when fault becomes persistent
+        if (!warning_logged) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "WARNING: Persistent thermocouple %s (0x%02X) - %s",
+                     is_critical ? "fault" : "noise", fault, fault_type);
+            serial_send_log("warn", "SAFETY", msg);
+            warning_logged = true;
+        }
+        return true;  // Allow operation
     }
 }

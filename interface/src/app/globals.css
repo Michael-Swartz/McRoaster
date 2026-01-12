@@ -1,26 +1,200 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Industrial palette */
+  --bg-primary: #1a1a1a;      /* Dark charcoal */
+  --bg-secondary: #252525;    /* Lighter charcoal */
+  --bg-panel: #2d2d2d;        /* Panel background */
+  --accent-orange: #ff6b35;   /* Warning/heat */
+  --accent-blue: #4a9eff;     /* Info/cooling */
+  --accent-green: #2ecc71;    /* Success/safe */
+  --accent-red: #e74c3c;      /* Error/danger */
+  --accent-yellow: #f39c12;   /* Caution */
+  --text-primary: #e0e0e0;    /* Main text */
+  --text-secondary: #888888;  /* Subdued text */
+  --border-color: #404040;    /* Panel borders */
+
+  /* Industrial styling */
+  --panel-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  --panel-border: 2px solid var(--border-color);
+  --gauge-glow: 0 0 20px rgba(255,107,53,0.3);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: Arial, Helvetica, sans-serif;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Industrial panel styling */
+.panel {
+  background: var(--bg-panel);
+  border: var(--panel-border);
+  border-radius: 0.5rem;
+  box-shadow: var(--panel-shadow);
+}
+
+/* Monospace fonts for numeric displays */
+.mono-display {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  letter-spacing: -0.02em;
+}
+
+/* LED-style status indicators */
+.led-indicator {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.led-indicator.on {
+  animation: led-pulse 2s ease-in-out infinite;
+}
+
+@keyframes led-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Gauge glow effect for warning temperatures */
+.gauge-warning {
+  box-shadow: var(--gauge-glow);
+}
+
+/* Brushed metal gradient for controls */
+.metal-surface {
+  background: linear-gradient(
+    135deg,
+    rgba(60, 60, 60, 0.8) 0%,
+    rgba(45, 45, 45, 0.9) 50%,
+    rgba(55, 55, 55, 0.8) 100%
+  );
+}
+
+/* Beveled panel edges */
+.beveled-panel {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-left: 1px solid rgba(255, 255, 255, 0.03);
+  border-right: 1px solid rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+/* Button states with industrial feel */
+.btn-industrial {
+  background: linear-gradient(180deg, #3a3a3a 0%, #2a2a2a 100%);
+  border: 1px solid #555;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: all 0.15s ease;
+}
+
+.btn-industrial:hover:not(:disabled) {
+  background: linear-gradient(180deg, #444444 0%, #333333 100%);
+}
+
+.btn-industrial:active:not(:disabled) {
+  background: linear-gradient(180deg, #2a2a2a 0%, #333333 100%);
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.3),
+    0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.btn-industrial:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Emergency stop button styling */
+.btn-emergency {
+  background: linear-gradient(180deg, #dc3545 0%, #a71d2a 100%);
+  border: 2px solid #ff4757;
+  box-shadow:
+    0 0 10px rgba(220, 53, 69, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  text-transform: uppercase;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+}
+
+.btn-emergency:hover:not(:disabled) {
+  background: linear-gradient(180deg, #e74c3c 0%, #c0392b 100%);
+  box-shadow:
+    0 0 15px rgba(220, 53, 69, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+/* Temperature display styling */
+.temp-display {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 2rem;
+  font-weight: 600;
+  text-shadow: 0 0 10px currentColor;
+}
+
+/* Slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-track {
+  background: linear-gradient(90deg, var(--accent-blue) 0%, var(--accent-orange) 100%);
+  height: 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--border-color);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  background: linear-gradient(180deg, #555 0%, #333 100%);
+  border-radius: 50%;
+  border: 2px solid #666;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  margin-top: -0.375rem;
+}
+
+input[type="range"]::-moz-range-track {
+  background: linear-gradient(90deg, var(--accent-blue) 0%, var(--accent-orange) 100%);
+  height: 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--border-color);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 1.25rem;
+  height: 1.25rem;
+  background: linear-gradient(180deg, #555 0%, #333 100%);
+  border-radius: 50%;
+  border: 2px solid #666;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Focus states */
+input[type="range"]:focus {
+  outline: none;
+}
+
+input[type="range"]:focus::-webkit-slider-thumb {
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    0 0 0 3px rgba(74, 158, 255, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }

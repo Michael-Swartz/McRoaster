@@ -46,8 +46,6 @@
 // ============== Safety Limits ==============
 #define MAX_CHAMBER_TEMP        260.0     // °C - absolute max chamber temp
 #define WARN_CHAMBER_TEMP       250.0     // °C - warning threshold
-#define MAX_HEATER_TEMP         210.0     // °C - heater safety cutoff (thermistor)
-#define WARN_HEATER_TEMP        190.0     // °C - heater warning threshold
 #define MIN_FAN_WHEN_HEATING    40        // % - minimum fan when heater enabled
 
 // ============== Temperature Targets ==============
@@ -66,7 +64,8 @@
 // ============== Fan Limits ==============
 #define FAN_MIN_DUTY            0         // % - minimum fan speed
 #define FAN_MAX_DUTY            100       // % - maximum fan speed
-#define FAN_PREHEAT_DUTY        60        // % - during preheat
+#define FAN_PREHEAT_DUTY        50        // % - during preheat (was 60)
+#define FAN_ROAST_DEFAULT       90        // % - default for roasting state
 #define FAN_COOLING_DUTY        100       // % - during cooling (max)
 #define FAN_ROAST_MIN_DUTY      30        // % - minimum while roasting
 
@@ -77,9 +76,7 @@
 // ============== Rate of Rise ==============
 #define ROR_SAMPLE_INTERVAL_MS  30000     // 30 seconds between RoR calculations
 
-// ============== Network ==============
-#define WEBSOCKET_PORT          81
-#define MDNS_HOSTNAME           "mcroaster"
-#define FIRMWARE_VERSION        "2.0.0"
+// ============== Firmware ==============
+#define FIRMWARE_VERSION        "3.0.0"   // WebSerial version
 
 #endif // CONFIG_H

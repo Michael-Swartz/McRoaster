@@ -6,17 +6,20 @@
 // ============== State Enumeration ==============
 enum class RoasterState {
     OFF = 0,
-    PREHEAT = 1,
-    ROASTING = 2,
-    COOLING = 3,
-    MANUAL = 4,
-    ERROR = 5
+    FAN_ONLY = 1,   // Fan running, heater disabled - for pre-warming beans or testing
+    PREHEAT = 2,
+    ROASTING = 3,
+    COOLING = 4,
+    MANUAL = 5,
+    ERROR = 6
 };
 
 // ============== Event Enumeration ==============
 enum class RoasterEvent {
     NONE = 0,
     STOP,
+    START_FAN_ONLY,     // Enter fan-only mode from OFF
+    EXIT_FAN_ONLY,      // Exit fan-only mode to OFF
     START_PREHEAT,
     LOAD_BEANS,
     END_ROAST,

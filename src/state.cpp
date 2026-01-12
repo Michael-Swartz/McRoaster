@@ -3,6 +3,7 @@
 #include "hardware.h"
 #include "pid_control.h"
 #include "safety.h"
+#include "serial_comm.h"
 
 // ============== Internal State ==============
 
@@ -27,6 +28,9 @@ static bool _error_fatal = false;
 static uint8_t _manual_fan_speed = 50;
 static uint8_t _manual_heater_power = 0;
 
+// Fan-only mode settings
+static uint8_t _fan_only_speed = 50;
+
 // ============== Forward Declarations ==============
 static void _enter_state(RoasterState new_state);
 static void _exit_state(RoasterState old_state);
@@ -49,7 +53,7 @@ void state_init() {
     fan_disable();
     heater_disable();
     
-    Serial.println("[STATE] State machine initialized - OFF");
+    serial_send_log("info", "STATE", "State machine initialized - OFF");
 }
 
 void state_update() {
@@ -61,7 +65,12 @@ void state_update() {
         case RoasterState::OFF:
             // Nothing to do in OFF state
             break;
-            
+
+        case RoasterState::FAN_ONLY:
+            // Fan running, heater MUST stay off
+            // Nothing else to update - fan speed is set directly
+            break;
+
         case RoasterState::PREHEAT:
             // Run PID to reach preheat temperature
             pid_update(chamber_temp);
@@ -101,10 +110,9 @@ void state_update() {
 }
 
 void state_handle_event(RoasterEvent event, float value) {
-    Serial.print("[STATE] Event: ");
-    Serial.print((int)event);
-    Serial.print(" in state: ");
-    Serial.println(state_get_name(_current_state));
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Event: %d in state: %s", (int)event, state_get_name(_current_state));
+    serial_send_log("debug", "STATE", msg);
     
     switch (event) {
         case RoasterEvent::STOP:
@@ -113,8 +121,24 @@ void state_handle_event(RoasterEvent event, float value) {
             }
             break;
             
-        case RoasterEvent::START_PREHEAT:
+        case RoasterEvent::START_FAN_ONLY:
             if (_current_state == RoasterState::OFF) {
+                if (value > 0 && value <= 100) {
+                    _fan_only_speed = (uint8_t)value;
+                }
+                _enter_state(RoasterState::FAN_ONLY);
+            }
+            break;
+
+        case RoasterEvent::EXIT_FAN_ONLY:
+            if (_current_state == RoasterState::FAN_ONLY) {
+                _enter_state(RoasterState::OFF);
+            }
+            break;
+
+        case RoasterEvent::START_PREHEAT:
+            // Can start preheat from OFF or FAN_ONLY
+            if (_current_state == RoasterState::OFF || _current_state == RoasterState::FAN_ONLY) {
                 if (value > 0) {
                     _preheat_target = value;
                 }
@@ -141,9 +165,9 @@ void state_handle_event(RoasterEvent event, float value) {
             if (_current_state == RoasterState::ROASTING && !_first_crack_marked) {
                 _first_crack_marked = true;
                 _first_crack_time = millis() - _roast_start_time;
-                Serial.print("[STATE] First crack marked at ");
-                Serial.print(_first_crack_time / 1000);
-                Serial.println(" seconds");
+                char msg[64];
+                snprintf(msg, sizeof(msg), "First crack marked at %lu seconds", _first_crack_time / 1000);
+                serial_send_log("info", "STATE", msg);
             }
             break;
             
@@ -188,8 +212,9 @@ void state_handle_event(RoasterEvent event, float value) {
                 } else if (_current_state == RoasterState::ROASTING) {
                     pid_set_setpoint(value);
                 }
-                Serial.print("[STATE] Setpoint changed to ");
-                Serial.println(value);
+                char msg[48];
+                snprintf(msg, sizeof(msg), "Setpoint changed to %.1f", value);
+                serial_send_log("info", "STATE", msg);
             }
             break;
             
@@ -197,20 +222,24 @@ void state_handle_event(RoasterEvent event, float value) {
             if (state_allows_fan_change()) {
                 uint8_t speed = (uint8_t)value;
                 if (speed > 100) speed = 100;
-                
-                // In manual mode, allow any speed
-                // In other modes, enforce minimum when heater is on
+
+                // In manual or fan-only mode, allow any speed (0-100)
                 if (_current_state == RoasterState::MANUAL) {
                     _manual_fan_speed = speed;
                     fan_set_speed(speed);
-                } else if (_current_state == RoasterState::ROASTING) {
+                } else if (_current_state == RoasterState::FAN_ONLY) {
+                    _fan_only_speed = speed;
+                    fan_set_speed(speed);
+                } else if (_current_state == RoasterState::PREHEAT || _current_state == RoasterState::ROASTING) {
+                    // Enforce minimum when heater is on
                     if (speed < FAN_ROAST_MIN_DUTY) {
                         speed = FAN_ROAST_MIN_DUTY;
                     }
                     fan_set_speed(speed);
                 }
-                Serial.print("[STATE] Fan speed changed to ");
-                Serial.println(speed);
+                char msg[48];
+                snprintf(msg, sizeof(msg), "Fan speed changed to %d", speed);
+                serial_send_log("info", "STATE", msg);
             }
             break;
             
@@ -220,19 +249,21 @@ void state_handle_event(RoasterEvent event, float value) {
                 if (power > 100) power = 100;
                 _manual_heater_power = power;
                 heater_set_power(power);
-                Serial.print("[STATE] Heater power changed to ");
-                Serial.println(power);
+                char msg[48];
+                snprintf(msg, sizeof(msg), "Heater power changed to %d", power);
+                serial_send_log("info", "STATE", msg);
             }
             break;
             
         case RoasterEvent::DISCONNECTED:
             // On disconnect during active roasting, enter cooling
-            if (_current_state == RoasterState::ROASTING || 
+            if (_current_state == RoasterState::ROASTING ||
                 _current_state == RoasterState::PREHEAT) {
-                Serial.println("[STATE] Disconnect during active state - entering cooling");
+                serial_send_log("warn", "STATE", "Disconnect during active state - entering cooling");
                 _enter_state(RoasterState::COOLING);
-            } else if (_current_state == RoasterState::MANUAL) {
-                Serial.println("[STATE] Disconnect in manual mode - entering OFF");
+            } else if (_current_state == RoasterState::MANUAL ||
+                       _current_state == RoasterState::FAN_ONLY) {
+                serial_send_log("info", "STATE", "Disconnect in manual/fan-only mode - entering OFF");
                 _enter_state(RoasterState::OFF);
             }
             break;
@@ -250,6 +281,7 @@ RoasterState state_get_current() {
 const char* state_get_name(RoasterState state) {
     switch (state) {
         case RoasterState::OFF:      return "OFF";
+        case RoasterState::FAN_ONLY: return "FAN_ONLY";
         case RoasterState::PREHEAT:  return "PREHEAT";
         case RoasterState::ROASTING: return "ROASTING";
         case RoasterState::COOLING:  return "COOLING";
@@ -329,7 +361,9 @@ bool state_allows_setpoint_change() {
 }
 
 bool state_allows_fan_change() {
-    return (_current_state == RoasterState::ROASTING ||
+    return (_current_state == RoasterState::FAN_ONLY ||
+            _current_state == RoasterState::PREHEAT ||
+            _current_state == RoasterState::ROASTING ||
             _current_state == RoasterState::MANUAL);
 }
 
@@ -353,14 +387,19 @@ void state_enter_error(const char* code, const char* message, bool fatal) {
 }
 
 static void _exit_state(RoasterState old_state) {
-    Serial.print("[STATE] Exiting state: ");
-    Serial.println(state_get_name(old_state));
-    
+    char msg[48];
+    snprintf(msg, sizeof(msg), "Exiting state: %s", state_get_name(old_state));
+    serial_send_log("debug", "STATE", msg);
+
     switch (old_state) {
         case RoasterState::OFF:
             // Nothing to clean up
             break;
-            
+
+        case RoasterState::FAN_ONLY:
+            // Nothing special to clean up
+            break;
+
         case RoasterState::PREHEAT:
             // PID will be reconfigured in new state if needed
             break;
@@ -392,8 +431,9 @@ static void _enter_state(RoasterState new_state) {
     
     _current_state = new_state;
     
-    Serial.print("[STATE] Entering state: ");
-    Serial.println(state_get_name(new_state));
+    char msg[48];
+    snprintf(msg, sizeof(msg), "Entering state: %s", state_get_name(new_state));
+    serial_send_log("info", "STATE", msg);
     
     switch (new_state) {
         case RoasterState::OFF:
@@ -401,19 +441,32 @@ static void _enter_state(RoasterState new_state) {
             fan_disable();
             heater_disable();
             pid_disable();
-            
+
             // Reset roast tracking
             _roast_start_time = 0;
             _first_crack_marked = false;
             _first_crack_time = 0;
             reset_ror();
             break;
-            
+
+        case RoasterState::FAN_ONLY:
+            // CRITICAL: Heater MUST be disabled in this state
+            heater_disable();
+            pid_disable();
+
+            // Enable fan at stored speed (default 50%)
+            fan_set_speed(_fan_only_speed);
+            fan_enable();
+
+            snprintf(msg, sizeof(msg), "Fan-only mode at %d%% speed - heater disabled", _fan_only_speed);
+            serial_send_log("info", "STATE", msg);
+            break;
+
         case RoasterState::PREHEAT:
             // Start preheat timer
             _preheat_start_time = millis();
-            
-            // Enable fan at preheat speed
+
+            // Enable fan at preheat speed (50%)
             fan_set_speed(FAN_PREHEAT_DUTY);
             fan_enable();
             
@@ -425,9 +478,8 @@ static void _enter_state(RoasterState new_state) {
             // Enable heater (controlled by PID)
             heater_enable();
             
-            Serial.print("[STATE] Preheating to ");
-            Serial.print(_preheat_target);
-            Serial.println("°C");
+            snprintf(msg, sizeof(msg), "Preheating to %.1f°C", _preheat_target);
+            serial_send_log("info", "STATE", msg);
             break;
             
         case RoasterState::ROASTING:
@@ -435,16 +487,14 @@ static void _enter_state(RoasterState new_state) {
             _roast_start_time = millis();
             _first_crack_marked = false;
             _first_crack_time = 0;
-            
+
             // Configure PID for roast setpoint
             pid_set_setpoint(_setpoint);
             pid_reset();
             pid_enable();
-            
-            // Fan continues at current speed (or default)
-            if (fan_get_speed() < FAN_ROAST_MIN_DUTY) {
-                fan_set_speed(FAN_ROAST_MIN_DUTY);
-            }
+
+            // Set fan to roasting default (90%)
+            fan_set_speed(FAN_ROAST_DEFAULT);
             fan_enable();
             
             // Heater continues (controlled by PID)
@@ -453,9 +503,8 @@ static void _enter_state(RoasterState new_state) {
             // Reset RoR calculation for new roast
             reset_ror();
             
-            Serial.print("[STATE] Roasting at setpoint ");
-            Serial.print(_setpoint);
-            Serial.println("°C");
+            snprintf(msg, sizeof(msg), "Roasting at setpoint %.1f°C", _setpoint);
+            serial_send_log("info", "STATE", msg);
             break;
             
         case RoasterState::COOLING:
@@ -467,7 +516,7 @@ static void _enter_state(RoasterState new_state) {
             fan_set_speed(FAN_COOLING_DUTY);
             fan_enable();
             
-            Serial.println("[STATE] Cooling - heater OFF, fan MAX");
+            serial_send_log("info", "STATE", "Cooling - heater OFF, fan MAX");
             break;
             
         case RoasterState::MANUAL:
@@ -486,7 +535,7 @@ static void _enter_state(RoasterState new_state) {
             // No PID in manual mode
             pid_disable();
             
-            Serial.println("[STATE] Manual mode - direct control");
+            serial_send_log("info", "STATE", "Manual mode - direct control");
             break;
             
         case RoasterState::ERROR:
@@ -495,10 +544,8 @@ static void _enter_state(RoasterState new_state) {
             heater_disable();
             pid_disable();
             
-            Serial.print("[STATE] ERROR: ");
-            Serial.print(_error_code);
-            Serial.print(" - ");
-            Serial.println(_error_message);
+            snprintf(msg, sizeof(msg), "ERROR: %s - %s", _error_code, _error_message);
+            serial_send_log("error", "STATE", msg);
             break;
     }
 }
