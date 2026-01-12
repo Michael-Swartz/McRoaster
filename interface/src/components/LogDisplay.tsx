@@ -30,26 +30,8 @@ const LOG_BG_COLORS = {
 
 export function LogDisplay({ logs, maxEntries = 100, className = '', onClear }: LogDisplayProps) {
   const [filterLevel, setFilterLevel] = useState<'debug' | 'info' | 'warn' | 'error' | 'all'>('info');
-  const [autoScroll, setAutoScroll] = useState(true);
   const logEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // Auto-scroll to bottom when new logs arrive
-  useEffect(() => {
-    if (autoScroll && logEndRef.current) {
-      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [logs, autoScroll]);
-
-  // Detect manual scrolling
-  const handleScroll = () => {
-    if (!containerRef.current) return;
-    
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    const isAtBottom = Math.abs(scrollHeight - clientHeight - scrollTop) < 10;
-    
-    setAutoScroll(isAtBottom);
-  };
 
   // Filter logs based on level
   const filteredLogs = logs.slice(-maxEntries).filter(log => {
@@ -99,19 +81,6 @@ export function LogDisplay({ logs, maxEntries = 100, className = '', onClear }: 
             <option value="error">Error</option>
           </select>
 
-          {/* Auto-scroll toggle */}
-          <button
-            onClick={() => setAutoScroll(!autoScroll)}
-            className={`text-xs px-2 py-1 rounded ${
-              autoScroll 
-                ? 'bg-blue-600 text-white' 
-                : 'bg-gray-700 text-gray-300'
-            }`}
-            title={autoScroll ? 'Auto-scroll enabled' : 'Auto-scroll disabled'}
-          >
-            {autoScroll ? '📌' : '📍'}
-          </button>
-
           {/* Clear button */}
           <button
             onClick={handleClear}
@@ -126,7 +95,6 @@ export function LogDisplay({ logs, maxEntries = 100, className = '', onClear }: 
       {/* Log entries */}
       <div 
         ref={containerRef}
-        onScroll={handleScroll}
         className="flex-1 overflow-y-auto bg-gray-900 p-2 font-mono text-xs"
       >
         {filteredLogs.length === 0 ? (
@@ -163,15 +131,6 @@ export function LogDisplay({ logs, maxEntries = 100, className = '', onClear }: 
         )}
         <div ref={logEndRef} />
       </div>
-
-      {/* Footer with status */}
-      {!autoScroll && (
-        <div className="p-1 bg-yellow-900/20 border-t border-yellow-800/50 text-center">
-          <span className="text-xs text-yellow-400">
-            ⚠️ Auto-scroll paused - scroll to bottom or click 📌 to resume
-          </span>
-        </div>
-      )}
     </div>
   );
 }

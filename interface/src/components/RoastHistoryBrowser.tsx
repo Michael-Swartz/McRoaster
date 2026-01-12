@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { RoastSession } from '@/types/roastHistory';
 import { formatDuration, formatRoastDate } from '@/types/roastHistory';
+import { RoastHistoryGraph } from './RoastHistoryGraph';
 
 interface RoastHistoryBrowserProps {
   isOpen: boolean;
@@ -209,6 +210,12 @@ export function RoastHistoryBrowser({
                       {selectedRoast.temperatureData.length}
                     </div>
                   </div>
+                </div>
+
+                {/* Temperature Graph */}
+                <div>
+                  <label className="block text-zinc-500 text-xs mb-2">Temperature Profile</label>
+                  <RoastHistoryGraph roast={selectedRoast} />
                 </div>
 
                 {/* Rating */}

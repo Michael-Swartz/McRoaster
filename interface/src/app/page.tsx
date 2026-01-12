@@ -21,6 +21,10 @@ export default function Home() {
   const [showHistory, setShowHistory] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const prevStateRef = useRef<string>('OFF');
+  
+  // Throttled temperature history for graph (updates at 1Hz)
+  const [throttledTempHistory, setThrottledTempHistory] = useState<any[]>([]);
+  const lastGraphUpdateRef = useRef<number>(0);
 
   const {
     // Connection state
@@ -79,6 +83,7 @@ export default function Home() {
     isRecording,
     startNewRoast,
     endRoast: endRoastHistory,
+    forceCompleteCurrentRoast,
     markFirstCrack: markFirstCrackHistory,
     addDataPoint,
     updateSetpoint,
@@ -151,6 +156,15 @@ export default function Home() {
     }
   }, [setpoint, isRecording, updateSetpoint]);
 
+  // Throttle temperature graph updates to 1Hz (1000ms)
+  useEffect(() => {
+    const now = Date.now();
+    if (now - lastGraphUpdateRef.current >= 1000) {
+      setThrottledTempHistory(tempHistory);
+      lastGraphUpdateRef.current = now;
+    }
+  }, [tempHistory]);
+
   return (
     <div className="min-h-screen bg-zinc-900 p-4 md:p-8">
       <div className="max-w-4xl mx-auto">
@@ -176,6 +190,16 @@ export default function Home() {
                 </span>
               )}
             </button>
+            {currentSession && currentSession.endTime === null && (
+              <button
+                onClick={forceCompleteCurrentRoast}
+                className="px-4 py-2 bg-orange-700 border border-orange-600 text-zinc-100 rounded hover:bg-orange-600 transition-colors flex items-center gap-2"
+                title="Complete and save the incomplete roast session"
+              >
+                <span>💾</span>
+                <span>Save Incomplete</span>
+              </button>
+            )}
             <button
               onClick={() => setShowHistory(true)}
               className="px-4 py-2 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded hover:bg-zinc-700 transition-colors flex items-center gap-2"
@@ -307,7 +331,7 @@ export default function Home() {
 
           {/* Temperature Graph */}
           <TemperatureGraph
-            data={tempHistory}
+            data={throttledTempHistory}
             firstCrackTimeMs={firstCrackTimeMs}
             setpoint={setpoint}
             connected={isConnected}

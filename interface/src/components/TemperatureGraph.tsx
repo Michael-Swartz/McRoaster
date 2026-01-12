@@ -1,21 +1,11 @@
 'use client';
 
-import { useMemo, useEffect } from 'react';
+import { useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import type { TemperatureDataPoint } from '@/types/roaster';
 
-// Register AG Charts modules once on client side
-if (typeof window !== 'undefined') {
-  import('ag-charts-community').then(({ ModuleRegistry, AllCommunityModule }) => {
-    ModuleRegistry.registerModules([AllCommunityModule]);
-  });
-}
-
-// Dynamic import to avoid SSR issues with AG Charts
-const AgCharts = dynamic(
-  () => import('ag-charts-react').then((mod) => mod.AgCharts),
-  { ssr: false }
-);
+// Dynamic import to avoid SSR issues
+const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
 
 interface TemperatureGraphProps {
   data: TemperatureDataPoint[];
@@ -39,139 +29,192 @@ export function TemperatureGraph({
 }: TemperatureGraphProps) {
   const hasData = data.length > 0;
 
-  // Memoize chart options to prevent unnecessary re-renders
-  // Using explicit any type due to AG Charts complex generic types
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chartOptions: any = useMemo(() => {
+  const option = useMemo(() => {
+    // Show last 60 seconds of data for auto-scrolling effect
+    const windowSeconds = 60;
+    const recentData = data.slice(-windowSeconds);
+    
+    // If we have no data or all times are 0, return early
+    if (recentData.length === 0) {
+      return null;
+    }
+    
+    // Debug: log first and last timeMs values
+    if (recentData.length > 0) {
+      console.log('[TemperatureGraph] First timeMs:', recentData[0].timeMs, 'Last timeMs:', recentData[recentData.length - 1].timeMs);
+    }
+    
+    const times = recentData.map(d => formatTime(d.timeMs));
+    const chamberTemps = recentData.map(d => d.chamberTemp);
+    const setpoints = recentData.map(d => d.setpoint);
+    const rors = recentData.map(d => d.ror);
+
     return {
-      theme: 'ag-default-dark',
-      background: {
-        fill: '#2d2d2d',
-      },
-      padding: {
-        top: 10,
-        right: 10,
-        bottom: 10,
-        left: 10,
-      },
-      data: data,
-      series: [
-        {
-          type: 'line' as const,
-          xKey: 'timeMs',
-          yKey: 'chamberTemp',
-          yName: 'Chamber',
-          stroke: '#ff6b35',
-          strokeWidth: 2,
-          marker: {
-            enabled: false,
-          },
-        },
-        {
-          type: 'line' as const,
-          xKey: 'timeMs',
-          yKey: 'setpoint',
-          yName: 'Setpoint',
-          stroke: '#4a9eff',
-          strokeWidth: 2,
-          lineDash: [5, 5],
-          marker: {
-            enabled: false,
-          },
-        },
-        {
-          type: 'line' as const,
-          xKey: 'timeMs',
-          yKey: 'ror',
-          yName: 'RoR',
-          stroke: '#2ecc71',
-          strokeWidth: 2,
-          marker: {
-            enabled: false,
-          },
-        },
-      ],
-      axes: [
-        {
-          type: 'number' as const,
-          position: 'bottom' as const,
-          title: {
-            enabled: false,
-          },
-          label: {
-            formatter: (params: { value: number }) => formatTime(params.value),
-            color: '#71717a',
-            fontSize: 11,
-          },
-          gridLine: {
-            style: [{ stroke: '#404040', lineDash: [2, 2] }],
-          },
-          line: {
-            color: '#404040',
-          },
-        },
-        {
-          type: 'number' as const,
-          position: 'left' as const,
-          keys: ['chamberTemp', 'setpoint'],
-          title: {
-            text: 'Temperature (C)',
-            color: '#888888',
-            fontSize: 11,
-          },
-          min: 0,
-          max: 260,
-          label: {
-            formatter: (params: { value: number }) => `${params.value}`,
-            color: '#71717a',
-            fontSize: 11,
-          },
-          gridLine: {
-            style: [{ stroke: '#404040', lineDash: [2, 2] }],
-          },
-          line: {
-            color: '#404040',
-          },
-        },
-        {
-          type: 'number' as const,
-          position: 'right' as const,
-          keys: ['ror'],
-          title: {
-            text: 'RoR (C/min)',
-            color: '#2ecc71',
-            fontSize: 11,
-          },
-          min: 0,
-          max: 20,
-          label: {
-            formatter: (params: { value: number }) => `${params.value}`,
-            color: '#2ecc71',
-            fontSize: 11,
-          },
-          gridLine: {
-            enabled: false,
-          },
-          line: {
-            color: '#2ecc71',
-          },
-        },
-      ],
-      legend: {
-        position: 'bottom' as const,
-        item: {
-          label: {
-            color: '#888888',
-            fontSize: 11,
-          },
-          marker: {
-            strokeWidth: 0,
-          },
-        },
+      backgroundColor: '#2d2d2d',
+      grid: {
+        left: '60px',
+        right: '60px',
+        top: '20px',
+        bottom: '50px',
       },
       tooltip: {
-        enabled: true,
+        trigger: 'axis',
+        backgroundColor: 'rgba(50, 50, 50, 0.9)',
+        borderColor: '#666',
+        textStyle: {
+          color: '#fff',
+        },
+        axisPointer: {
+          type: 'cross',
+          label: {
+            backgroundColor: '#505050',
+          },
+        },
       },
+      legend: {
+        data: ['Chamber', 'Setpoint', 'RoR'],
+        bottom: 0,
+        textStyle: {
+          color: '#888',
+        },
+      },
+      xAxis: {
+        type: 'category',
+        data: times,
+        axisLabel: {
+          color: '#71717a',
+          fontSize: 11,
+          interval: 4, // Show every 5th second (0, 5, 10, 15...)
+        },
+        axisLine: {
+          lineStyle: {
+            color: '#404040',
+          },
+        },
+        splitLine: {
+          show: true,
+          lineStyle: {
+            color: '#404040',
+            type: 'dashed',
+          },
+        },
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: 'Temperature (°C)',
+          min: 0,
+          max: 260,
+          nameTextStyle: {
+            color: '#888',
+            fontSize: 11,
+          },
+          axisLabel: {
+            color: '#71717a',
+            fontSize: 11,
+          },
+          axisLine: {
+            lineStyle: {
+              color: '#404040',
+            },
+          },
+          splitLine: {
+            lineStyle: {
+              color: '#404040',
+              type: 'dashed',
+            },
+          },
+        },
+        {
+          type: 'value',
+          name: 'RoR (°C/min)',
+          min: 0,
+          max: 20,
+          nameTextStyle: {
+            color: '#2ecc71',
+            fontSize: 11,
+          },
+          axisLabel: {
+            color: '#2ecc71',
+            fontSize: 11,
+          },
+          axisLine: {
+            lineStyle: {
+              color: '#2ecc71',
+            },
+          },
+          splitLine: {
+            show: false,
+          },
+        },
+      ],
+      series: [
+        {
+          name: 'Chamber',
+          type: 'line',
+          data: chamberTemps,
+          smooth: true,
+          lineStyle: {
+            color: '#ff6b35',
+            width: 2,
+          },
+          itemStyle: {
+            color: '#ff6b35',
+          },
+          showSymbol: false,
+        },
+        {
+          name: 'Setpoint',
+          type: 'line',
+          data: setpoints,
+          lineStyle: {
+            color: '#4a9eff',
+            width: 2,
+            type: 'dashed',
+          },
+          itemStyle: {
+            color: '#4a9eff',
+          },
+          showSymbol: false,
+        },
+        {
+          name: 'RoR',
+          type: 'line',
+          yAxisIndex: 1,
+          data: rors,
+          smooth: true,
+          lineStyle: {
+            color: '#2ecc71',
+            width: 2,
+          },
+          itemStyle: {
+            color: '#2ecc71',
+          },
+          showSymbol: false,
+        },
+        ...(firstCrackTimeMs !== null ? [{
+          name: 'First Crack',
+          type: 'line',
+          markLine: {
+            silent: true,
+            symbol: 'none',
+            lineStyle: {
+              color: '#f39c12',
+              width: 2,
+              type: 'dashed',
+            },
+            data: [
+              {
+                xAxis: formatTime(firstCrackTimeMs),
+                label: {
+                  formatter: 'FC',
+                  color: '#f39c12',
+                },
+              },
+            ],
+          },
+        }] : []),
+      ],
     };
   }, [data, firstCrackTimeMs]);
 
@@ -208,9 +251,9 @@ export function TemperatureGraph({
         )}
       </div>
 
-      {hasData ? (
+      {hasData && option ? (
         <div className="h-[200px]">
-          <AgCharts options={chartOptions} />
+          <ReactECharts option={option} style={{ height: '100%', width: '100%' }} />
         </div>
       ) : (
         <div className="h-[200px] flex items-center justify-center">

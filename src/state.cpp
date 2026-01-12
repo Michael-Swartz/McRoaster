@@ -321,7 +321,10 @@ uint8_t state_get_heater_power() {
 }
 
 uint32_t state_get_roast_time_ms() {
-    if (_current_state == RoasterState::ROASTING || _current_state == RoasterState::COOLING) {
+    // Return elapsed time from PREHEAT through COOLING
+    if (_current_state == RoasterState::PREHEAT || 
+        _current_state == RoasterState::ROASTING || 
+        _current_state == RoasterState::COOLING) {
         if (_roast_start_time > 0) {
             return millis() - _roast_start_time;
         }
@@ -463,7 +466,8 @@ static void _enter_state(RoasterState new_state) {
             break;
 
         case RoasterState::PREHEAT:
-            // Start preheat timer
+            // Start session timer (includes preheat through cooling)
+            _roast_start_time = millis();
             _preheat_start_time = millis();
 
             // Enable fan at preheat speed (50%)
@@ -483,8 +487,8 @@ static void _enter_state(RoasterState new_state) {
             break;
             
         case RoasterState::ROASTING:
-            // Start roast timer
-            _roast_start_time = millis();
+            // Don't reset roast timer - it started in PREHEAT
+            // _roast_start_time already set in PREHEAT
             _first_crack_marked = false;
             _first_crack_time = 0;
 

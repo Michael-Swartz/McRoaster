@@ -154,6 +154,12 @@ export function useWebSerial(): UseWebSerialReturn {
   // Handle incoming message
   const handleMessage = useCallback((line: string) => {
     try {
+      // Validate message starts with JSON
+      if (!line.startsWith('{')) {
+        console.warn('[Serial] Invalid message start (discarded):', line.substring(0, 80));
+        return;
+      }
+
       const message = JSON.parse(line) as OutboundMessage;
       console.log('[Serial] Received:', message);
 
@@ -188,7 +194,7 @@ export function useWebSerial(): UseWebSerialReturn {
         // Add to temperature history during active states
         if (p.state !== 'OFF' && p.state !== 'ERROR' && p.chamberTemp !== null) {
           const dataPoint: TemperatureDataPoint = {
-            timeMs: p.roastTimeMs,
+            timeMs: p.roastTimeMs, // Use Arduino timestamp (includes preheat)
             chamberTemp: p.chamberTemp,
             setpoint: p.setpoint,
             ror: p.ror,

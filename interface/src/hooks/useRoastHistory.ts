@@ -19,6 +19,7 @@ export interface UseRoastHistoryReturn {
   // Session management
   startNewRoast: (preheatSetpoint?: number) => void;
   endRoast: () => void;
+  forceCompleteCurrentRoast: () => void;  // Manually complete current roast
   markFirstCrack: (timeMs: number) => void;
   addDataPoint: (data: Omit<RoastDataPoint, 'time'>, roastTimeMs: number) => void;
   updateSetpoint: (setpoint: number) => void;
@@ -83,14 +84,46 @@ export function useRoastHistory(): UseRoastHistoryReturn {
       const stored = localStorage.getItem(STORAGE_KEYS.CURRENT);
       if (stored) {
         const session = JSON.parse(stored) as RoastSession;
-        setCurrentSession(session);
-        currentSessionRef.current = session;
-        setIsRecording(session.endTime === null);
+        
+        // If session is older than 2 hours and still has no endTime, auto-save it
+        const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000);
+        if (session.endTime === null && session.startTime < twoHoursAgo) {
+          console.log('[RoastHistory] Recovering incomplete roast from', new Date(session.startTime));
+          
+          // Set end time to last data point or start time
+          const recoveredSession = {
+            ...session,
+            endTime: session.temperatureData.length > 0
+              ? session.startTime + session.totalRoastTime
+              : session.startTime,
+            totalRoastTime: session.totalRoastTime || 0,
+          };
+          
+          // Save to history
+          const stored = localStorage.getItem(STORAGE_KEYS.ROASTS);
+          const currentSavedRoasts = stored ? JSON.parse(stored) as RoastSession[] : [];
+          const updatedRoasts = [recoveredSession, ...currentSavedRoasts];
+          localStorage.setItem(STORAGE_KEYS.ROASTS, JSON.stringify(updatedRoasts));
+          
+          // Clear current session
+          localStorage.removeItem(STORAGE_KEYS.CURRENT);
+          
+          console.log('[RoastHistory] Recovered roast saved as:', recoveredSession.id);
+          
+          // Reload saved roasts to show the recovered one
+          loadSavedRoasts();
+        } else if (session.endTime === null) {
+          // Still in progress
+          setCurrentSession(session);
+          currentSessionRef.current = session;
+          setIsRecording(true);
+          console.log('[RoastHistory] Restored in-progress roast:', session.id);
+        }
       }
     } catch (e) {
       console.error('[RoastHistory] Failed to load current session:', e);
     }
-  }, []);
+  }, [loadSavedRoasts]);
 
   // Save current session to localStorage
   const saveCurrentSession = useCallback((session: RoastSession | null) => {
@@ -142,7 +175,12 @@ export function useRoastHistory(): UseRoastHistoryReturn {
 
   // End current roast session
   const endRoast = useCallback(() => {
-    if (!currentSessionRef.current) return;
+    console.log('[RoastHistory] endRoast called, currentSessionRef:', currentSessionRef.current?.id);
+    
+    if (!currentSessionRef.current) {
+      console.log('[RoastHistory] No current session to end');
+      return;
+    }
 
     const session = {
       ...currentSessionRef.current,
@@ -152,8 +190,14 @@ export function useRoastHistory(): UseRoastHistoryReturn {
         : 0,
     };
 
+    console.log('[RoastHistory] Ending roast:', session.id, 'with', session.temperatureData.length, 'data points');
+
+    // Get fresh saved roasts from localStorage to avoid stale closure
+    const stored = localStorage.getItem(STORAGE_KEYS.ROASTS);
+    const currentSavedRoasts = stored ? JSON.parse(stored) as RoastSession[] : [];
+
     // Add to saved roasts
-    const updatedRoasts = [session, ...savedRoasts];
+    const updatedRoasts = [session, ...currentSavedRoasts];
     saveRoasts(updatedRoasts);
 
     // Clear current session
@@ -162,8 +206,42 @@ export function useRoastHistory(): UseRoastHistoryReturn {
     setIsRecording(false);
     saveCurrentSession(null);
 
-    console.log('[RoastHistory] Ended roast:', session.id);
-  }, [savedRoasts, saveRoasts, saveCurrentSession]);
+    console.log('[RoastHistory] Roast saved successfully:', session.id);
+  }, [saveRoasts, saveCurrentSession]);
+
+  // Force complete current roast (for manual recovery)
+  const forceCompleteCurrentRoast = useCallback(() => {
+    console.log('[RoastHistory] Force completing current roast...');
+    
+    // Read current session from localStorage (in case of stale state)
+    const stored = localStorage.getItem(STORAGE_KEYS.CURRENT);
+    if (!stored) {
+      console.warn('[RoastHistory] No current session to complete');
+      return;
+    }
+
+    const session = JSON.parse(stored) as RoastSession;
+    
+    // Set end time if not already set
+    if (!session.endTime) {
+      session.endTime = Date.now();
+      session.totalRoastTime = session.endTime - session.startTime;
+    }
+
+    // Save to history
+    const roastsStored = localStorage.getItem(STORAGE_KEYS.ROASTS);
+    const currentSavedRoasts = roastsStored ? JSON.parse(roastsStored) as RoastSession[] : [];
+    const updatedRoasts = [session, ...currentSavedRoasts];
+    saveRoasts(updatedRoasts);
+
+    // Clear current session
+    setCurrentSession(null);
+    currentSessionRef.current = null;
+    setIsRecording(false);
+    saveCurrentSession(null);
+
+    console.log('[RoastHistory] Forced roast completion successful:', session.id);
+  }, [saveRoasts, saveCurrentSession]);
 
   // Mark first crack
   const markFirstCrack = useCallback((timeMs: number) => {
@@ -284,6 +362,7 @@ export function useRoastHistory(): UseRoastHistoryReturn {
     // Session management
     startNewRoast,
     endRoast,
+    forceCompleteCurrentRoast,
     markFirstCrack,
     addDataPoint,
     updateSetpoint,

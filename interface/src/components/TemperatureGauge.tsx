@@ -110,11 +110,14 @@ export function TemperatureGauge({
           }}
           labels={{
             valueLabel: {
-              formatTextValue: (value) => `${value}C`,
+              formatTextValue: (value) => `${value}°C`,
               style: {
-                fontSize: '35px',
+                fontSize: '30px',
                 fill: connected ? '#ffffff' : '#666666',
+                textShadow: '0px 0px 3px rgba(0,0,0,0.8)',
               },
+              matchColorWithArc: false,
+              hide: false,
             },
             tickLabels: {
               type: 'outer',
